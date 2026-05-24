@@ -7,7 +7,7 @@ import lombok.NoArgsConstructor;
 import org.furmani.orderservice.models.OrderStatus;
 
 import java.math.BigDecimal;
-import java.util.Date;
+import java.time.LocalDateTime;
 
 @Data
 @NoArgsConstructor
@@ -23,6 +23,6 @@ public class OrderResponse {
     private BigDecimal price;
     private BigDecimal totalAmount;
     private OrderStatus orderStatus;
-    private Date createdAt;
+    private LocalDateTime createdAt;
 }
 

@@ -1,15 +1,15 @@
 package org.furmani.orderservice.controller;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.furmani.orderservice.dto.CreateOrderRequest;
 import org.furmani.orderservice.dto.OrderResponse;
 import org.furmani.orderservice.dto.UpdateOrderStatusRequest;
 import org.furmani.orderservice.response.ApiResponse;
-import org.furmani.orderservice.service.OrderServiceImpl;
+import org.furmani.orderservice.service.OrderService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import jakarta.validation.Valid;
 
 import java.util.List;
 
@@ -19,7 +19,7 @@ import java.util.List;
 @CrossOrigin(origins = "*", maxAge = 3600)
 public class OrderController {
 
-    private final OrderServiceImpl orderService;
+    private final OrderService orderService;
 
     /**
      * Create a new order

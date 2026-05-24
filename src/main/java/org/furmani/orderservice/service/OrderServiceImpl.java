@@ -32,7 +32,7 @@ public class OrderServiceImpl implements OrderService {
         // Create order entity
         Order order = Order.builder()
                 .orderNumber(orderNumber)
-                .userId(request.getCustomerId())
+                .customerId(request.getCustomerId())
                 .productId(request.getProductId())
                 .quantity(request.getQuantity())
                 .price(request.getPrice())
@@ -61,7 +61,7 @@ public class OrderServiceImpl implements OrderService {
 
     @Transactional(readOnly = true)
     public List<OrderResponse> getOrdersByCustomerId(Long customerId) {
-        List<Order> orders = orderRepository.findByUserId(customerId);
+        List<Order> orders = orderRepository.findByCustomerId(customerId);
         if (orders.isEmpty()) {
             throw new OrderNotFoundException("No orders found for customer ID: " + customerId);
         }
@@ -89,7 +89,7 @@ public class OrderServiceImpl implements OrderService {
         return OrderResponse.builder()
                 .id(order.getId())
                 .orderNumber(order.getOrderNumber())
-                .customerId(order.getUserId())
+                .customerId(order.getCustomerId())
                 .productId(order.getProductId())
                 .quantity(order.getQuantity())
                 .price(order.getPrice())
