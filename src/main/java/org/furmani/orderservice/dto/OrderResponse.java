@@ -8,6 +8,7 @@ import org.furmani.orderservice.models.OrderStatus;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 @NoArgsConstructor
@@ -18,9 +19,7 @@ public class OrderResponse {
     private Long id;
     private String orderNumber;
     private Long customerId;
-    private Long productId;
-    private Integer quantity;
-    private BigDecimal price;
+    private List<OrderItemResponse> items;
     private BigDecimal totalAmount;
     private OrderStatus orderStatus;
     private LocalDateTime createdAt;

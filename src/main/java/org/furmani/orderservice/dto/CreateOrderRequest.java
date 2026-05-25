@@ -4,10 +4,12 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 
-import java.math.BigDecimal;
+import java.util.List;
 
 @Data
 @NoArgsConstructor
@@ -19,16 +21,8 @@ public class CreateOrderRequest {
     @Positive(message = "Customer ID must be positive")
     private Long customerId;
 
-    @NotNull(message = "Product ID cannot be null")
-    @Positive(message = "Product ID must be positive")
-    private Long productId;
-
-    @NotNull(message = "Quantity cannot be null")
-    @Positive(message = "Quantity must be positive")
-    private Integer quantity;
-
-    @NotNull(message = "Price cannot be null")
-    @Positive(message = "Price must be positive")
-    private BigDecimal price;
+    @Valid
+    @NotEmpty(message = "Order must contain at least one item")
+    private List<OrderItemRequest> items;
 }
 

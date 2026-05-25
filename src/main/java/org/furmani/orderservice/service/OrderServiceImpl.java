@@ -1,11 +1,16 @@
 package org.furmani.orderservice.service;
 
 import lombok.RequiredArgsConstructor;
+import org.furmani.orderservice.client.ProductServiceClient;
 import org.furmani.orderservice.dto.CreateOrderRequest;
+import org.furmani.orderservice.dto.OrderItemRequest;
+import org.furmani.orderservice.dto.OrderItemResponse;
 import org.furmani.orderservice.dto.OrderResponse;
-import org.furmani.orderservice.models.Order;
-import org.furmani.orderservice.models.OrderStatus;
+import org.furmani.orderservice.dto.ProductDetails;
 import org.furmani.orderservice.exception.OrderNotFoundException;
+import org.furmani.orderservice.models.Order;
+import org.furmani.orderservice.models.OrderItem;
+import org.furmani.orderservice.models.OrderStatus;
 import org.furmani.orderservice.repository.OrderRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,41 +26,53 @@ import java.util.stream.Collectors;
 public class OrderServiceImpl implements OrderService {
 
     private final OrderRepository orderRepository;
+    private final ProductServiceClient productServiceClient;
 
     public OrderResponse createOrder(CreateOrderRequest request) {
-        // Generate unique order number
         String orderNumber = "ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
-        // Calculate total amount
-        BigDecimal totalAmount = request.getPrice().multiply(BigDecimal.valueOf(request.getQuantity()));
+        BigDecimal totalAmount = BigDecimal.ZERO;
 
-        // Create order entity
         Order order = Order.builder()
                 .orderNumber(orderNumber)
                 .customerId(request.getCustomerId())
-                .productId(request.getProductId())
-                .quantity(request.getQuantity())
-                .price(request.getPrice())
                 .totalAmount(totalAmount)
                 .orderStatus(OrderStatus.PENDING)
                 .build();
 
+        for (OrderItemRequest itemReq : request.getItems()) {
+            BigDecimal itemTotal = itemReq.getPrice().multiply(BigDecimal.valueOf(itemReq.getQuantity()));
+            totalAmount = totalAmount.add(itemTotal);
+
+            OrderItem item = OrderItem.builder()
+                    .productId(itemReq.getProductId())
+                    .quantity(itemReq.getQuantity())
+                    .price(itemReq.getPrice())
+                    .totalAmount(itemTotal)
+                    .order(order)
+                    .build();
+
+            order.getItems().add(item);
+        }
+
+        order.setTotalAmount(totalAmount);
+
         Order savedOrder = orderRepository.save(order);
-        return mapToOrderResponse(savedOrder);
+        return mapToOrderResponse(savedOrder, false);
     }
 
     @Transactional(readOnly = true)
     public OrderResponse getOrderById(Long id) {
         Order order = orderRepository.findById(id)
                 .orElseThrow(() -> new OrderNotFoundException("Order not found with ID: " + id));
-        return mapToOrderResponse(order);
+        return mapToOrderResponse(order, true);
     }
 
     @Transactional(readOnly = true)
     public List<OrderResponse> getAllOrders() {
         return orderRepository.findAll()
                 .stream()
-                .map(this::mapToOrderResponse)
+                .map(order -> mapToOrderResponse(order, false))
                 .collect(Collectors.toList());
     }
 
@@ -66,7 +83,7 @@ public class OrderServiceImpl implements OrderService {
             throw new OrderNotFoundException("No orders found for customer ID: " + customerId);
         }
         return orders.stream()
-                .map(this::mapToOrderResponse)
+                .map(order -> mapToOrderResponse(order, false))
                 .collect(Collectors.toList());
     }
 
@@ -76,7 +93,7 @@ public class OrderServiceImpl implements OrderService {
 
         order.setOrderStatus(newStatus);
         Order updatedOrder = orderRepository.save(order);
-        return mapToOrderResponse(updatedOrder);
+        return mapToOrderResponse(updatedOrder, false);
     }
 
     public void deleteOrder(Long id) {
@@ -85,18 +102,41 @@ public class OrderServiceImpl implements OrderService {
         orderRepository.delete(order);
     }
 
-    private OrderResponse mapToOrderResponse(Order order) {
+    private OrderResponse mapToOrderResponse(Order order, boolean enrichProductDetails) {
+        List<OrderItemResponse> items = order.getItems().stream()
+                .map(item -> mapToOrderItemResponse(item, enrichProductDetails))
+                .collect(Collectors.toList());
+
         return OrderResponse.builder()
                 .id(order.getId())
                 .orderNumber(order.getOrderNumber())
                 .customerId(order.getCustomerId())
-                .productId(order.getProductId())
-                .quantity(order.getQuantity())
-                .price(order.getPrice())
+                .items(items)
                 .totalAmount(order.getTotalAmount())
                 .orderStatus(order.getOrderStatus())
                 .createdAt(order.getCreatedAt())
                 .build();
+    }
+
+    private OrderItemResponse mapToOrderItemResponse(OrderItem item, boolean enrichProductDetails) {
+        OrderItemResponse.OrderItemResponseBuilder builder = OrderItemResponse.builder()
+                .id(item.getId())
+                .productId(item.getProductId())
+                .quantity(item.getQuantity())
+                .price(item.getPrice())
+                .totalAmount(item.getTotalAmount());
+
+        if (enrichProductDetails) {
+            productServiceClient.getProductDetails(item.getProductId())
+                    .ifPresent(productDetails -> applyProductDetails(builder, productDetails));
+        }
+
+        return builder.build();
+    }
+
+    private void applyProductDetails(OrderItemResponse.OrderItemResponseBuilder builder, ProductDetails productDetails) {
+        builder.productName(productDetails.getProductName())
+                .productDescription(productDetails.getProductDescription());
     }
 }
 

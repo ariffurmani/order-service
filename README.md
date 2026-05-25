@@ -28,11 +28,19 @@ order-service/
 │   ├── models/
 │   │   ├── BaseModel.java                    # Common auditing fields (id, createdAt, lastUpdatedAt)
 │   │   ├── Order.java                        # Order JPA Entity (extends BaseModel)
+│   │   ├── OrderItem.java                    # Order Item JPA Entity (product line item)
 │   │   └── OrderStatus.java                  # Order Status Enum
 │   ├── dto/
 │   │   ├── CreateOrderRequest.java           # Create Order DTO
+│   │   ├── OrderItemRequest.java             # Order Item Request DTO
+│   │   ├── OrderItemResponse.java            # Order Item Response DTO (enriched with product details)
 │   │   ├── UpdateOrderStatusRequest.java     # Update Status DTO
-│   │   └── OrderResponse.java                # Order Response DTO
+│   │   ├── OrderResponse.java                # Order Response DTO
+│   │   └── ProductDetails.java               # Product Details DTO
+│   ├── client/
+│   │   └── ProductServiceClient.java         # Product Service REST Client
+│   ├── configuration/
+│   │   └── RestTemplateConfig.java           # RestTemplate Bean Configuration
 │   ├── exception/
 │   │   ├── OrderNotFoundException.java       # Custom Exception
 │   │   └── GlobalExceptionHandler.java       # Global Exception Handler
@@ -60,6 +68,9 @@ order-service/
 - ✅ CORS support
 - ✅ Transaction management
 - ✅ Lombok annotations for boilerplate reduction
+- ✅ Multiple products per order (OrderItem support)
+- ✅ Microservice integration with Product Service via RestTemplate
+- ✅ Non-blocking product detail enrichment for individual order retrieval
 
 ## Database Setup
 
@@ -84,15 +95,24 @@ Tables are automatically created by Hibernate with `spring.jpa.hibernate.ddl-aut
 
 ```java
 Order {
-    Long id,                      // Primary Key (Auto-generated, provided by BaseModel)
-    String orderNumber,           // Unique order number (ORD-XXXXXXXX)
-    Long customerId,              // Customer ID (renamed from userId)
-    Long productId,               // Product ID
-    Integer quantity,             // Order quantity
-    BigDecimal price,             // Unit price
-    BigDecimal totalAmount,       // Total price (calculated)
-    OrderStatus orderStatus,      // Current order status
-    LocalDateTime createdAt       // Creation timestamp (audited via BaseModel)
+    Long id,                          // Primary Key (Auto-generated, provided by BaseModel)
+    String orderNumber,               // Unique order number (ORD-XXXXXXXX)
+    Long customerId,                  // Customer ID
+    List<OrderItem> items,            // Multiple product items in the order
+    BigDecimal totalAmount,           // Total price (calculated as sum of all items)
+    OrderStatus orderStatus,          // Current order status
+    LocalDateTime createdAt           // Creation timestamp (audited via BaseModel)
+}
+
+OrderItem {
+    Long id,                          // Primary Key (Auto-generated)
+    Long productId,                   // Product ID
+    Integer quantity,                 // Item quantity
+    BigDecimal price,                 // Unit price
+    BigDecimal totalAmount,           // Item total (price * quantity)
+    String productName,               // Product name (enriched from Product Service)
+    String productDescription,        // Product description (enriched from Product Service)
+    Order order                       // Reference to parent Order
 }
 ```
 
@@ -109,6 +129,7 @@ CANCELLED    -> Order cancelled
 ## REST API Endpoints
 
 ### 1. Create Order
+
 ```http
 POST /api/orders
 Content-Type: application/json
@@ -116,9 +137,18 @@ Content-Type: application/json
 Request Body:
 {
     "customerId": 1,
-    "productId": 101,
-    "quantity": 5,
-    "price": 99.99
+    "items": [
+        {
+            "productId": 101,
+            "quantity": 2,
+            "price": 49.99
+        },
+        {
+            "productId": 202,
+            "quantity": 1,
+            "price": 99.50
+        }
+    ]
 }
 
 Response (201 Created):
@@ -129,15 +159,35 @@ Response (201 Created):
         "id": 1,
         "orderNumber": "ORD-A1B2C3D4",
         "customerId": 1,
-        "productId": 101,
-        "quantity": 5,
-        "price": 99.99,
-        "totalAmount": 499.95,
+        "items": [
+            {
+                "id": 101,
+                "productId": 101,
+                "quantity": 2,
+                "price": 49.99,
+                "totalAmount": 99.98,
+                "productName": null,
+                "productDescription": null
+            },
+            {
+                "id": 102,
+                "productId": 202,
+                "quantity": 1,
+                "price": 99.50,
+                "totalAmount": 99.50,
+                "productName": null,
+                "productDescription": null
+            }
+        ],
+        "totalAmount": 199.48,
         "orderStatus": "PENDING",
-        "createdAt": "2026-05-24T10:30:00"
+        "createdAt": "2026-05-25T10:30:00"
     }
 }
 ```
+
+Note: When creating an order, `productName` and `productDescription` are `null`. They are only populated when calling `GET /api/orders/{id}`.
+
 
 ### 2. Get All Orders
 ```http
@@ -152,18 +202,29 @@ Response (200 OK):
             "id": 1,
             "orderNumber": "ORD-A1B2C3D4",
             "customerId": 1,
-            "productId": 101,
-            "quantity": 5,
-            "price": 99.99,
-            "totalAmount": 499.95,
+            "items": [
+                {
+                    "id": 101,
+                    "productId": 101,
+                    "quantity": 2,
+                    "price": 49.99,
+                    "totalAmount": 99.98,
+                    "productName": null,
+                    "productDescription": null
+                }
+            ],
+            "totalAmount": 99.98,
             "orderStatus": "PENDING",
-            "createdAt": "2026-05-24T10:30:00"
+            "createdAt": "2026-05-25T10:30:00"
         }
     ]
 }
 ```
 
-### 3. Get Order by ID
+Note: Product details (`productName`, `productDescription`) are `null` in list endpoints.
+
+
+### 3. Get Order by ID (Enriched with Product Details)
 ```http
 GET /api/orders/{id}
 
@@ -175,15 +236,35 @@ Response (200 OK):
         "id": 1,
         "orderNumber": "ORD-A1B2C3D4",
         "customerId": 1,
-        "productId": 101,
-        "quantity": 5,
-        "price": 99.99,
-        "totalAmount": 499.95,
+        "items": [
+            {
+                "id": 101,
+                "productId": 101,
+                "quantity": 2,
+                "price": 49.99,
+                "totalAmount": 99.98,
+                "productName": "Laptop",
+                "productDescription": "High-performance laptop for professionals"
+            },
+            {
+                "id": 102,
+                "productId": 202,
+                "quantity": 1,
+                "price": 99.50,
+                "totalAmount": 99.50,
+                "productName": "Wireless Mouse",
+                "productDescription": "Ergonomic wireless mouse with long battery life"
+            }
+        ],
+        "totalAmount": 199.48,
         "orderStatus": "PENDING",
-        "createdAt": "2026-05-24T10:30:00"
+        "createdAt": "2026-05-25T10:30:00"
     }
 }
 ```
+
+**Note**: This endpoint enriches order items with product details from the Product Service. If product details are unavailable, the `productName` and `productDescription` fields will be `null`, but the order is still returned successfully.
+
 
 ### 4. Get Orders by Customer ID
 ```http
@@ -198,16 +279,25 @@ Response (200 OK):
             "id": 1,
             "orderNumber": "ORD-A1B2C3D4",
             "customerId": 1,
-            "productId": 101,
-            "quantity": 5,
-            "price": 99.99,
-            "totalAmount": 499.95,
+            "items": [
+                {
+                    "id": 101,
+                    "productId": 101,
+                    "quantity": 2,
+                    "price": 49.99,
+                    "totalAmount": 99.98,
+                    "productName": null,
+                    "productDescription": null
+                }
+            ],
+            "totalAmount": 99.98,
             "orderStatus": "PENDING",
-            "createdAt": "2026-05-24T10:30:00"
+            "createdAt": "2026-05-25T10:30:00"
         }
     ]
 }
 ```
+
 
 ### 5. Update Order Status
 ```http
@@ -227,16 +317,23 @@ Response (200 OK):
         "id": 1,
         "orderNumber": "ORD-A1B2C3D4",
         "customerId": 1,
-        "productId": 101,
-        "quantity": 5,
-        "price": 99.99,
-        "totalAmount": 499.95,
+        "items": [
+            {
+                "id": 101,
+                "productId": 101,
+                "quantity": 2,
+                "price": 49.99,
+                "totalAmount": 99.98,
+                "productName": null,
+                "productDescription": null
+            }
+        ],
+        "totalAmount": 99.98,
         "orderStatus": "CONFIRMED",
-        "createdAt": "2026-05-24T10:30:00"
+        "createdAt": "2026-05-25T10:30:00"
     }
 }
 ```
-
 ### 6. Delete/Cancel Order
 ```http
 DELETE /api/orders/{id}
@@ -247,6 +344,49 @@ Response (204 No Content):
     "status": 204
 }
 ```
+
+## Microservice Integration
+
+### Product Service Integration
+
+The Order Service integrates with a Product Service to enrich order item details. This integration is seamless and non-blocking — if the Product Service is unavailable, orders are still returned with product details missing.
+
+**Configuration:**
+```properties
+# application.properties
+product.service.base-url=http://localhost:8080/product-service
+```
+
+**How it works:**
+1. When calling `GET /api/orders/{id}`, the service fetches each order item
+2. For each item, it calls the Product Service endpoint: `GET {product.service.base-url}/product/{productId}`
+3. If available, the response extracts `productName` and `productDescription` and enriches the order item
+4. If the Product Service is unavailable or the product is not found, the order item is returned without product details
+
+**Example Product Service Response (expected format):**
+```json
+{
+    "status": 200,
+    "data": {
+        "id": 101,
+        "productName": "Laptop",
+        "productDescription": "High-performance laptop for professionals",
+        "price": 49.99
+    }
+}
+```
+
+Or direct format:
+```json
+{
+    "id": 101,
+    "productName": "Laptop",
+    "productDescription": "High-performance laptop for professionals",
+    "price": 49.99
+}
+```
+
+The client supports both wrapper and direct JSON formats.
 
 ## Error Handling
 
@@ -305,21 +445,33 @@ Once the application is running, you can test the APIs using:
 
 ### Using cURL
 ```bash
-# Create an order
+# Create an order with multiple items
 curl -X POST http://localhost:8080/api/orders \
   -H "Content-Type: application/json" \
   -d '{
     "customerId": 1,
-    "productId": 101,
-    "quantity": 5,
-    "price": 99.99
+    "items": [
+      {
+        "productId": 101,
+        "quantity": 2,
+        "price": 49.99
+      },
+      {
+        "productId": 202,
+        "quantity": 1,
+        "price": 99.50
+      }
+    ]
   }'
 
 # Get all orders
 curl http://localhost:8080/api/orders
 
-# Get order by ID
+# Get order by ID (with enriched product details)
 curl http://localhost:8080/api/orders/1
+
+# Get orders by customer ID
+curl http://localhost:8080/api/orders/customer/1
 
 # Update order status
 curl -X PUT http://localhost:8080/api/orders/1/status \
@@ -365,7 +517,7 @@ Import the API endpoints mentioned above into your REST client.
 - Add pagination and filtering
 - Add caching (Redis)
 - Add messaging queue (RabbitMQ/Kafka)
-- Add service-to-service communication (Feign Client)
+- Replace RestTemplate with Feign Client for service-to-service communication
 - Add API documentation (Swagger/OpenAPI)
 - Add unit and integration tests
 - Add deployment configuration (Docker, Kubernetes)
