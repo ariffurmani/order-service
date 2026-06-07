@@ -77,6 +77,28 @@ public class GlobalExceptionHandler {
         return new ResponseEntity<>(response, HttpStatus.BAD_GATEWAY);
     }
 
+
+    @ExceptionHandler(InvalidTokenException.class)
+    public ResponseEntity<ApiResponse<Void>> handleInvalidTokenException(InvalidTokenException ex) {
+        log.warn("[GlobalExceptionHandler] handleInvalidTokenException() - INVALID TOKEN: {}", ex.getMessage());
+        ApiResponse<Void> response = ApiResponse.error(ex.getMessage(), HttpStatus.UNAUTHORIZED.value());
+        return new ResponseEntity<>(response, HttpStatus.UNAUTHORIZED);
+    }
+
+    @ExceptionHandler(UnauthorizedAccessException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnauthorizedAccessException(UnauthorizedAccessException ex) {
+        log.warn("[GlobalExceptionHandler] handleUnauthorizedAccessException() - UNAUTHORIZED: {}", ex.getMessage());
+        ApiResponse<Void> response = ApiResponse.error(ex.getMessage(), HttpStatus.UNAUTHORIZED.value());
+        return new ResponseEntity<>(response, HttpStatus.UNAUTHORIZED);
+    }
+
+    @ExceptionHandler(ForbiddenAccessException.class)
+    public ResponseEntity<ApiResponse<Void>> handleForbiddenAccessException(ForbiddenAccessException ex) {
+        log.warn("[GlobalExceptionHandler] handleForbiddenAccessException() - FORBIDDEN: {}", ex.getMessage());
+        ApiResponse<Void> response = ApiResponse.error(ex.getMessage(), HttpStatus.FORBIDDEN.value());
+        return new ResponseEntity<>(response, HttpStatus.FORBIDDEN);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleGeneralException(
             Exception ex) {
