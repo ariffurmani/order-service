@@ -16,7 +16,7 @@ import java.util.List;
 
 @Slf4j
 @RestController
-@RequestMapping("/api/orders")
+@RequestMapping("/orders")
 @RequiredArgsConstructor
 @CrossOrigin(origins = "*", maxAge = 3600)
 public class OrderController {
@@ -168,11 +168,12 @@ public class OrderController {
             orderService.deleteOrder(id);
             log.info("[OrderController] deleteOrder() - SUCCESS - Order ID: {} deleted successfully", id);
 
-            ApiResponse<Void> response = ApiResponse.error(
+            ApiResponse<Void> response = ApiResponse.success(
                     "Order deleted successfully",
-                    HttpStatus.NO_CONTENT.value()
+                    HttpStatus.OK.value(),
+                    null
             );
-            return new ResponseEntity<>(response, HttpStatus.NO_CONTENT);
+            return new ResponseEntity<>(response, HttpStatus.OK);
         } catch (Exception e) {
             log.error("[OrderController] deleteOrder() - ERROR - Failed to delete order ID: {}", id, e);
             throw e;

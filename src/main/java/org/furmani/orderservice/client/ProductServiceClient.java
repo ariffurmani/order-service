@@ -5,9 +5,12 @@ import org.furmani.orderservice.dto.ProductDetails;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
 @Slf4j
@@ -33,87 +36,125 @@ public class ProductServiceClient {
                     ? productServiceBaseUrl.substring(0, productServiceBaseUrl.length() - 1)
                     : productServiceBaseUrl;
 
-            String url = normalizedBaseUrl + "/products/" + productId;
+            String url = normalizedBaseUrl + "/product/" + productId;
             log.debug("[ProductServiceClient] getProductDetails() - Fetching from URL: {}", url);
 
-            ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
+            ResponseEntity<ProductDetails> response = restTemplate.getForEntity(url, ProductDetails.class);
 
             log.debug("[ProductServiceClient] getProductDetails() - Response received. Status Code: {}",
                     response.getStatusCode());
 
-            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null || response.getBody().isBlank()) {
-                log.warn("[ProductServiceClient] getProductDetails() - WARN - Invalid response for productId: {}. Status: {}",
+            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+                log.error("[ProductServiceClient] getProductDetails() - ERROR - Invalid successful response for productId: {}. Status: {}",
                         productId, response.getStatusCode());
-                return Optional.empty();
+                throw new IllegalStateException("Invalid product response for productId: " + productId);
             }
 
-            String body = response.getBody();
-            log.debug("[ProductServiceClient] getProductDetails() - Response body received for productId: {}", productId);
-            log.debug("[ProductServiceClient] getProductDetails() - Response body content: {}", body);
-            String productName = firstMatch(body, "productName", "name");
-            String productDescription = firstMatch(body, "productDescription", "description");
-
-            if (productName == null && productDescription == null) {
-                log.warn("[ProductServiceClient] getProductDetails() - WARN - No product details found in response for productId: {}",
-                        productId);
-                return Optional.empty();
-            }
-
-            ProductDetails details = ProductDetails.builder()
-                    .productName(productName)
-                    .productDescription(productDescription)
-                    .build();
+            ProductDetails details = response.getBody();
 
             log.info("[ProductServiceClient] getProductDetails() - SUCCESS - Product details fetched for productId: {}. productName: {}",
-                    productId, productName);
+                    productId, details.getProductName());
             return Optional.of(details);
+        } catch (HttpClientErrorException.NotFound ex) {
+            log.warn("[ProductServiceClient] getProductDetails() - WARN - Product not found for productId: {}", productId);
+            return Optional.empty();
+        } catch (HttpClientErrorException ex) {
+            log.error("[ProductServiceClient] getProductDetails() - ERROR - Product service returned HTTP {} for productId: {}",
+                    ex.getStatusCode(), productId, ex);
+            throw new IllegalStateException("Failed to fetch product details for productId: " + productId, ex);
         } catch (RestClientException ex) {
             log.error("[ProductServiceClient] getProductDetails() - ERROR - Unable to fetch product details for productId: {}. Exception: {}",
                     productId, ex.getMessage(), ex);
-            return Optional.empty();
-        } catch (Exception ex) {
-            log.error("[ProductServiceClient] getProductDetails() - ERROR - Unexpected error while fetching product details for productId: {}",
-                    productId, ex);
-            return Optional.empty();
+            throw new IllegalStateException("Failed to fetch product details for productId: " + productId, ex);
         }
     }
 
-    private String firstMatch(String body, String... fieldNames) {
-        log.debug("[ProductServiceClient] firstMatch() - START - Searching for fields: {}", String.join(", ", fieldNames));
+    public void decrementStock(Long productId, Integer quantity) {
+        log.debug("[ProductServiceClient] decrementStock() - START - Decrementing stock for productId: {} by {}",
+                productId, quantity);
 
-        for (String fieldName : fieldNames) {
-            String token = "\"" + fieldName + "\"";
-            int tokenIndex = body.indexOf(token);
-            if (tokenIndex < 0) {
-                log.debug("[ProductServiceClient] firstMatch() - Field '{}' not found", fieldName);
-                continue;
-            }
-
-            int colonIndex = body.indexOf(':', tokenIndex + token.length());
-            if (colonIndex < 0) {
-                log.debug("[ProductServiceClient] firstMatch() - Colon not found after field '{}'", fieldName);
-                continue;
-            }
-
-            int firstQuoteIndex = body.indexOf('"', colonIndex + 1);
-            if (firstQuoteIndex < 0) {
-                log.debug("[ProductServiceClient] firstMatch() - Opening quote not found for field '{}'", fieldName);
-                continue;
-            }
-
-            int secondQuoteIndex = body.indexOf('"', firstQuoteIndex + 1);
-            if (secondQuoteIndex < 0) {
-                log.debug("[ProductServiceClient] firstMatch() - Closing quote not found for field '{}'", fieldName);
-                continue;
-            }
-
-            String result = body.substring(firstQuoteIndex + 1, secondQuoteIndex);
-            log.debug("[ProductServiceClient] firstMatch() - SUCCESS - Found value for field '{}': {}", fieldName, result);
-            return result;
+        if (productId == null || quantity == null || quantity <= 0) {
+            log.warn("[ProductServiceClient] decrementStock() - WARN - Invalid productId or quantity. productId: {}, quantity: {}",
+                    productId, quantity);
+            throw new IllegalArgumentException("Invalid productId or quantity");
         }
 
-        log.debug("[ProductServiceClient] firstMatch() - No matching field found");
-        return null;
+        try {
+            String normalizedBaseUrl = productServiceBaseUrl.endsWith("/")
+                    ? productServiceBaseUrl.substring(0, productServiceBaseUrl.length() - 1)
+                    : productServiceBaseUrl;
+
+            String url = normalizedBaseUrl + "/product/" + productId + "/stock/decrement";
+            Map<String, Integer> body = new HashMap<>();
+            body.put("quantity", quantity);
+
+            log.debug("[ProductServiceClient] decrementStock() - Calling URL: {} with body: {}", url, body);
+            ResponseEntity<Void> response = restTemplate.postForEntity(url, body, Void.class);
+
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                log.error("[ProductServiceClient] decrementStock() - ERROR - Product service returned non-2xx status: {} for productId: {}",
+                        response.getStatusCode(), productId);
+                throw new IllegalStateException("Failed to decrement stock for productId: " + productId);
+            }
+
+            log.info("[ProductServiceClient] decrementStock() - SUCCESS - Decremented stock for productId: {} by {}",
+                    productId, quantity);
+        } catch (HttpClientErrorException.NotFound ex) {
+            log.warn("[ProductServiceClient] decrementStock() - WARN - Product not found for productId: {}", productId);
+            throw new IllegalStateException("Product not found: " + productId, ex);
+        } catch (HttpClientErrorException ex) {
+            log.error("[ProductServiceClient] decrementStock() - ERROR - Product service returned HTTP {} for productId: {}",
+                    ex.getStatusCode(), productId, ex);
+            throw new IllegalStateException("Failed to decrement stock for productId: " + productId, ex);
+        } catch (RestClientException ex) {
+            log.error("[ProductServiceClient] decrementStock() - ERROR - Unable to decrement stock for productId: {}. Exception: {}",
+                    productId, ex.getMessage(), ex);
+            throw new IllegalStateException("Failed to decrement stock for productId: " + productId, ex);
+        }
+    }
+
+    public void incrementStock(Long productId, Integer quantity) {
+        log.debug("[ProductServiceClient] incrementStock() - START - Incrementing stock for productId: {} by {}",
+                productId, quantity);
+
+        if (productId == null || quantity == null || quantity <= 0) {
+            log.warn("[ProductServiceClient] incrementStock() - WARN - Invalid productId or quantity. productId: {}, quantity: {}",
+                    productId, quantity);
+            throw new IllegalArgumentException("Invalid productId or quantity");
+        }
+
+        try {
+            String normalizedBaseUrl = productServiceBaseUrl.endsWith("/")
+                    ? productServiceBaseUrl.substring(0, productServiceBaseUrl.length() - 1)
+                    : productServiceBaseUrl;
+
+            String url = normalizedBaseUrl + "/product/" + productId + "/stock/increment";
+            Map<String, Integer> body = new HashMap<>();
+            body.put("quantity", quantity);
+
+            log.debug("[ProductServiceClient] incrementStock() - Calling URL: {} with body: {}", url, body);
+            ResponseEntity<Void> response = restTemplate.postForEntity(url, body, Void.class);
+
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                log.error("[ProductServiceClient] incrementStock() - ERROR - Product service returned non-2xx status: {} for productId: {}",
+                        response.getStatusCode(), productId);
+                throw new IllegalStateException("Failed to increment stock for productId: " + productId);
+            }
+
+            log.info("[ProductServiceClient] incrementStock() - SUCCESS - Incremented stock for productId: {} by {}",
+                    productId, quantity);
+        } catch (HttpClientErrorException.NotFound ex) {
+            log.warn("[ProductServiceClient] incrementStock() - WARN - Product not found for productId: {}", productId);
+            throw new IllegalStateException("Product not found: " + productId, ex);
+        } catch (HttpClientErrorException ex) {
+            log.error("[ProductServiceClient] incrementStock() - ERROR - Product service returned HTTP {} for productId: {}",
+                    ex.getStatusCode(), productId, ex);
+            throw new IllegalStateException("Failed to increment stock for productId: " + productId, ex);
+        } catch (RestClientException ex) {
+            log.error("[ProductServiceClient] incrementStock() - ERROR - Unable to increment stock for productId: {}. Exception: {}",
+                    productId, ex.getMessage(), ex);
+            throw new IllegalStateException("Failed to increment stock for productId: " + productId, ex);
+        }
     }
 }
 

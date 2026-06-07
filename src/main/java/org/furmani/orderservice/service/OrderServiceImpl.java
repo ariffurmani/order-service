@@ -8,6 +8,8 @@ import org.furmani.orderservice.dto.OrderItemRequest;
 import org.furmani.orderservice.dto.OrderItemResponse;
 import org.furmani.orderservice.dto.OrderResponse;
 import org.furmani.orderservice.dto.ProductDetails;
+import org.furmani.orderservice.exception.ProductNotFoundException;
+import org.furmani.orderservice.exception.ProductUnavailableException;
 import org.furmani.orderservice.exception.OrderNotFoundException;
 import org.furmani.orderservice.models.Order;
 import org.furmani.orderservice.models.OrderItem;
@@ -17,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -34,11 +37,15 @@ public class OrderServiceImpl implements OrderService {
         log.debug("[OrderServiceImpl] createOrder() - START - Processing create order request for customerId: {}",
                 request.getCustomerId());
 
+        // Keep outside try so catch-block compensation can access it.
+        List<OrderItemRequest> decrementedItems = new ArrayList<>();
+
         try {
             String orderNumber = "ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
             log.debug("[OrderServiceImpl] createOrder() - Generated order number: {}", orderNumber);
 
             BigDecimal totalAmount = BigDecimal.ZERO;
+
 
             Order order = Order.builder()
                     .orderNumber(orderNumber)
@@ -51,16 +58,38 @@ public class OrderServiceImpl implements OrderService {
                     request.getCustomerId());
 
             for (OrderItemRequest itemReq : request.getItems()) {
-                BigDecimal itemTotal = itemReq.getPrice().multiply(BigDecimal.valueOf(itemReq.getQuantity()));
+                ProductDetails productDetails = productServiceClient.getProductDetails(itemReq.getProductId())
+                        .orElseThrow(() -> new ProductNotFoundException("Product not found with ID: " + itemReq.getProductId()));
+
+                if (productDetails.getPrice() == null) {
+                    throw new ProductUnavailableException("Product price is unavailable for product ID: " + itemReq.getProductId());
+                }
+
+                Integer stockQuantity = productDetails.getStockQuantity();
+                if (stockQuantity == null || stockQuantity <= 0) {
+                    throw new ProductUnavailableException("Product is out of stock for product ID: " + itemReq.getProductId());
+                }
+
+                if (itemReq.getQuantity() > stockQuantity) {
+                    throw new ProductUnavailableException("Requested quantity exceeds available stock for product ID: " + itemReq.getProductId());
+                }
+
+                // decrement stock in product service before finalizing order item
+                log.debug("[OrderServiceImpl] createOrder() - Decrementing stock for productId: {}, quantity: {}",
+                        itemReq.getProductId(), itemReq.getQuantity());
+                productServiceClient.decrementStock(itemReq.getProductId(), itemReq.getQuantity());
+                decrementedItems.add(itemReq);
+
+                BigDecimal itemTotal = productDetails.getPrice().multiply(BigDecimal.valueOf(itemReq.getQuantity()));
                 totalAmount = totalAmount.add(itemTotal);
 
                 log.debug("[OrderServiceImpl] createOrder() - Processing order item - productId: {}, quantity: {}, price: {}, itemTotal: {}",
-                        itemReq.getProductId(), itemReq.getQuantity(), itemReq.getPrice(), itemTotal);
+                        itemReq.getProductId(), itemReq.getQuantity(), productDetails.getPrice(), itemTotal);
 
                 OrderItem item = OrderItem.builder()
                         .productId(itemReq.getProductId())
                         .quantity(itemReq.getQuantity())
-                        .price(itemReq.getPrice())
+                        .price(productDetails.getPrice())
                         .totalAmount(itemTotal)
                         .order(order)
                         .build();
@@ -80,6 +109,26 @@ public class OrderServiceImpl implements OrderService {
         } catch (Exception e) {
             log.error("[OrderServiceImpl] createOrder() - ERROR - Failed to create order for customerId: {}",
                     request.getCustomerId(), e);
+
+            // attempt to compensate previously decremented stock if any
+            try {
+                if (!decrementedItems.isEmpty()) {
+                    log.warn("[OrderServiceImpl] createOrder() - COMPENSATION - Attempting to restore stock for {} items", decrementedItems.size());
+                    for (OrderItemRequest dec : decrementedItems) {
+                        try {
+                            productServiceClient.incrementStock(dec.getProductId(), dec.getQuantity());
+                            log.info("[OrderServiceImpl] createOrder() - COMPENSATION - Restored stock for productId: {}, quantity: {}",
+                                    dec.getProductId(), dec.getQuantity());
+                        } catch (Exception compEx) {
+                            log.error("[OrderServiceImpl] createOrder() - COMPENSATION - Failed to restore stock for productId: {}",
+                                    dec.getProductId(), compEx);
+                        }
+                    }
+                }
+            } catch (Exception compOverall) {
+                log.error("[OrderServiceImpl] createOrder() - COMPENSATION - Unexpected error during compensation", compOverall);
+            }
+
             throw e;
         }
     }
@@ -138,8 +187,8 @@ public class OrderServiceImpl implements OrderService {
             List<Order> orders = orderRepository.findByCustomerId(customerId);
 
             if (orders.isEmpty()) {
-                log.warn("[OrderServiceImpl] getOrdersByCustomerId() - WARN - No orders found for customerId: {}", customerId);
-                throw new OrderNotFoundException("No orders found for customer ID: " + customerId);
+                log.info("[OrderServiceImpl] getOrdersByCustomerId() - No orders found for customerId: {}", customerId);
+                return List.of();
             }
 
             log.info("[OrderServiceImpl] getOrdersByCustomerId() - SUCCESS - Retrieved {} orders for customerId: {}",
@@ -150,9 +199,6 @@ public class OrderServiceImpl implements OrderService {
             return orders.stream()
                     .map(order -> mapToOrderResponse(order, false))
                     .collect(Collectors.toList());
-        } catch (OrderNotFoundException e) {
-            log.error("[OrderServiceImpl] getOrdersByCustomerId() - ERROR - Order not found for customerId: {}", customerId);
-            throw e;
         } catch (Exception e) {
             log.error("[OrderServiceImpl] getOrdersByCustomerId() - ERROR - Exception while fetching orders for customerId: {}",
                     customerId, e);
@@ -171,11 +217,18 @@ public class OrderServiceImpl implements OrderService {
                     });
 
             OrderStatus previousStatus = order.getOrderStatus();
+            validateStatusTransition(previousStatus, newStatus);
+
             order.setOrderStatus(newStatus);
             log.debug("[OrderServiceImpl] updateOrderStatus() - Status changed from {} to {} for order ID: {}",
                     previousStatus, newStatus, id);
 
             Order updatedOrder = orderRepository.save(order);
+
+            if (previousStatus != OrderStatus.CANCELLED && newStatus == OrderStatus.CANCELLED) {
+                restoreStockForOrder(order);
+            }
+
             log.info("[OrderServiceImpl] updateOrderStatus() - SUCCESS - Order ID: {} status updated. Previous: {}, Current: {}",
                     id, previousStatus, newStatus);
 
@@ -201,6 +254,11 @@ public class OrderServiceImpl implements OrderService {
                     id, order.getOrderNumber(), order.getCustomerId());
 
             orderRepository.delete(order);
+
+            if (order.getOrderStatus() != OrderStatus.CANCELLED) {
+                restoreStockForOrder(order);
+            }
+
             log.info("[OrderServiceImpl] deleteOrder() - SUCCESS - Order ID: {} deleted successfully. OrderNumber: {}",
                     id, order.getOrderNumber());
         } catch (Exception e) {
@@ -256,12 +314,17 @@ public class OrderServiceImpl implements OrderService {
             if (enrichProductDetails) {
                 log.debug("[OrderServiceImpl] mapToOrderItemResponse() - Fetching product details for productId: {}",
                         item.getProductId());
-                productServiceClient.getProductDetails(item.getProductId())
-                        .ifPresent(productDetails -> {
-                            log.debug("[OrderServiceImpl] mapToOrderItemResponse() - Product details found for productId: {}, productName: {}",
-                                    item.getProductId(), productDetails.getProductName());
-                            applyProductDetails(builder, productDetails);
-                        });
+                try {
+                    productServiceClient.getProductDetails(item.getProductId())
+                            .ifPresent(productDetails -> {
+                                log.debug("[OrderServiceImpl] mapToOrderItemResponse() - Product details found for productId: {}, productName: {}",
+                                        item.getProductId(), productDetails.getProductName());
+                                applyProductDetails(builder, productDetails);
+                            });
+                } catch (Exception ex) {
+                    log.warn("[OrderServiceImpl] mapToOrderItemResponse() - WARN - Unable to enrich product details for productId: {}",
+                            item.getProductId(), ex);
+                }
             }
 
             OrderItemResponse response = builder.build();
@@ -289,6 +352,45 @@ public class OrderServiceImpl implements OrderService {
             log.error("[OrderServiceImpl] applyProductDetails() - ERROR - Failed to apply product details for productName: {}",
                     productDetails.getProductName(), e);
             throw e;
+        }
+    }
+
+    private void validateStatusTransition(OrderStatus previousStatus, OrderStatus newStatus) {
+        if (previousStatus == OrderStatus.CANCELLED && newStatus != OrderStatus.CANCELLED) {
+            throw new IllegalArgumentException("Cannot change status of a cancelled order");
+        }
+
+        if (previousStatus == OrderStatus.DELIVERED && newStatus != OrderStatus.DELIVERED) {
+            throw new IllegalArgumentException("Cannot change status of a delivered order");
+        }
+    }
+
+    private void restoreStockForOrder(Order order) {
+        log.warn("[OrderServiceImpl] restoreStockForOrder() - START - Restoring stock for order ID: {}, orderNumber: {}",
+                order.getId(), order.getOrderNumber());
+
+        List<OrderItem> restoredItems = new ArrayList<>();
+        try {
+            for (OrderItem item : order.getItems()) {
+                productServiceClient.incrementStock(item.getProductId(), item.getQuantity());
+                restoredItems.add(item);
+                log.info("[OrderServiceImpl] restoreStockForOrder() - Restored stock for productId: {}, quantity: {}",
+                        item.getProductId(), item.getQuantity());
+            }
+        } catch (Exception ex) {
+            log.error("[OrderServiceImpl] restoreStockForOrder() - ERROR - Failed restoring stock. Attempting rollback for {} items",
+                    restoredItems.size(), ex);
+
+            for (OrderItem restoredItem : restoredItems) {
+                try {
+                    productServiceClient.decrementStock(restoredItem.getProductId(), restoredItem.getQuantity());
+                } catch (Exception rollbackEx) {
+                    log.error("[OrderServiceImpl] restoreStockForOrder() - ROLLBACK ERROR - Failed to rollback stock for productId: {}",
+                            restoredItem.getProductId(), rollbackEx);
+                }
+            }
+
+            throw new IllegalStateException("Failed to restore stock for order: " + order.getOrderNumber(), ex);
         }
     }
 }

@@ -15,6 +15,22 @@ import java.util.Map;
 @ControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(ProductNotFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleProductNotFoundException(
+            ProductNotFoundException ex) {
+        log.error("[GlobalExceptionHandler] handleProductNotFoundException() - PRODUCT NOT FOUND: {}", ex.getMessage(), ex);
+        ApiResponse<Void> response = ApiResponse.error(ex.getMessage(), HttpStatus.NOT_FOUND.value());
+        return new ResponseEntity<>(response, HttpStatus.NOT_FOUND);
+    }
+
+    @ExceptionHandler(ProductUnavailableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleProductUnavailableException(
+            ProductUnavailableException ex) {
+        log.warn("[GlobalExceptionHandler] handleProductUnavailableException() - PRODUCT UNAVAILABLE: {}", ex.getMessage(), ex);
+        ApiResponse<Void> response = ApiResponse.error(ex.getMessage(), HttpStatus.CONFLICT.value());
+        return new ResponseEntity<>(response, HttpStatus.CONFLICT);
+    }
+
     @ExceptionHandler(OrderNotFoundException.class)
     public ResponseEntity<ApiResponse<Void>> handleOrderNotFoundException(
             OrderNotFoundException ex) {
@@ -43,6 +59,22 @@ public class GlobalExceptionHandler {
                 .data(errors)
                 .build();
         return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiResponse<Void>> handleIllegalArgumentException(
+            IllegalArgumentException ex) {
+        log.warn("[GlobalExceptionHandler] handleIllegalArgumentException() - BAD REQUEST: {}", ex.getMessage());
+        ApiResponse<Void> response = ApiResponse.error(ex.getMessage(), HttpStatus.BAD_REQUEST.value());
+        return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<ApiResponse<Void>> handleIllegalStateException(
+            IllegalStateException ex) {
+        log.error("[GlobalExceptionHandler] handleIllegalStateException() - STATE ERROR: {}", ex.getMessage(), ex);
+        ApiResponse<Void> response = ApiResponse.error(ex.getMessage(), HttpStatus.BAD_GATEWAY.value());
+        return new ResponseEntity<>(response, HttpStatus.BAD_GATEWAY);
     }
 
     @ExceptionHandler(Exception.class)
